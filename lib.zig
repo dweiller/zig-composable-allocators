@@ -1,0 +1,487 @@
+const std = @import("std");
+
+const assert = std.debug.assert;
+
+pub fn Interface(comptime T: type) type {
+    return struct {
+        const required = struct {
+            /// Attempt to allocate exactly `len` bytes aligned to `1 << ptr_align`.
+            ///
+            /// `ret_addr` is optionally provided as the first return address of the
+            /// allocation call stack. If the value is `0` it means no return address
+            /// has been provided.
+            const alloc = fn (self: *T, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8;
+
+            /// Attempt to expand or shrink memory in place. `buf.len` must equal the
+            /// length requested from the most recent successful call to `alloc` or
+            /// `resize`. `buf_align` must equal the same value that was passed as the
+            /// `ptr_align` parameter to the original `alloc` call.
+            ///
+            /// A result of `true` indicates the resize was successful and the
+            /// allocation now has the same address but a size of `new_len`. `false`
+            /// indicates the resize could not be completed without moving the
+            /// allocation to a different address.
+            ///
+            /// `new_len` must be greater than zero.
+            ///
+            /// `ret_addr` is optionally provided as the first return address of the
+            /// allocation call stack. If the value is `0` it means no return address
+            /// has been provided.
+            const resize = fn (self: *T, buf: []u8, buf_align: u8, new_len: usize, ret_addr: usize) bool;
+
+            /// Free and invalidate a buffer.
+            ///
+            /// `buf.len` must equal the most recent length returned by `alloc` or
+            /// given to a successful `resize` call.
+            ///
+            /// `buf_align` must equal the same value that was passed as the
+            /// `ptr_align` parameter to the original `alloc` call.
+            ///
+            /// `ret_addr` is optionally provided as the first return address of the
+            /// allocation call stack. If the value is `0` it means no return address
+            /// has been provided.
+            const free = fn (self: *T, buf: []u8, buf_align: u8, ret_addr: usize) void;
+        };
+
+        const optional = struct {
+            /// Checks whether the allocator owns the memory for `buf`.
+            const owns = fn (self: *T, buf: []u8) bool;
+
+            /// Attempt to return all remaining memory available to the allocator, or
+            /// return null, if there isn't any.
+            const allocAll = fn (self: *T) ?[]u8;
+
+            /// Free all allocated memory.
+            const freeAll = fn (self: *T) void;
+        };
+    };
+}
+
+pub fn allocator(a: anytype) std.mem.Allocator {
+    const Self = @typeInfo(@TypeOf(a)).Pointer.child;
+
+    comptime {
+        validateAllocator(Self);
+    }
+
+    return .{
+        .ptr = a,
+        .vtable = &.{
+            .alloc = &struct {
+                fn alloc(ptr: *anyopaque, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
+                    const self = @ptrCast(*Self, @alignCast(@alignOf(Self), ptr));
+                    return self.alloc(len, log2_ptr_align, ret_addr);
+                }
+            }.alloc,
+            .resize = &struct {
+                fn resize(ptr: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, ret_addr: usize) bool {
+                    const self = @ptrCast(*Self, @alignCast(@alignOf(Self), ptr));
+                    return self.resize(buf, log2_buf_align, new_len, ret_addr);
+                }
+            }.resize,
+            .free = &struct {
+                fn free(ptr: *anyopaque, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
+                    const self = @ptrCast(*Self, @alignCast(@alignOf(Self), ptr));
+                    self.free(buf, log2_buf_align, ret_addr);
+                }
+            }.free,
+        },
+    };
+}
+
+pub fn validateAllocator(comptime T: type) void {
+    comptime {
+        for (std.meta.declarations(Interface(T).required)) |decl| {
+            const E = @field(Interface(T).required, decl.name);
+            if (!@hasDecl(T, decl.name)) {
+                @compileError("type " ++ @typeName(T) ++ " must have declaration " ++ decl.name ++
+                    " of type " ++ @typeName(T));
+            }
+            const D = @TypeOf(@field(T, decl.name));
+            if (D != E) {
+                @compileError("declaration " ++ decl.name ++ " in type " ++ @typeName(T) ++
+                    " is expected to have type " ++ @typeName(E) ++ ", found " ++ @typeName(D));
+            }
+        }
+
+        for (std.meta.declarations(Interface(T).optional)) |decl| {
+            if (@hasDecl(T, decl.name)) {
+                const E = @field(Interface(T).optional, decl.name);
+                const D = @TypeOf(@field(T, decl.name));
+                if (D != E) {
+                    @compileError("declaration " ++ decl.name ++ " in type " ++ @typeName(T) ++
+                        " is expected to have type " ++ @typeName(E) ++ ", found " ++ @typeName(D));
+                }
+            }
+        }
+    }
+}
+
+pub const Std = struct {
+    a: std.mem.Allocator,
+
+    pub fn init(a: std.mem.Allocator) Std {
+        return Std{ .a = a };
+    }
+
+    pub fn alloc(self: *Std, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
+        return self.a.rawAlloc(len, log2_ptr_align, ret_addr);
+    }
+
+    pub fn resize(self: *Std, buf: []u8, log2_buf_align: u8, new_len: usize, ret_addr: usize) bool {
+        return self.a.rawResize(buf, log2_buf_align, new_len, ret_addr);
+    }
+
+    pub fn free(self: *Std, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
+        return self.a.rawFree(buf, log2_buf_align, ret_addr);
+    }
+};
+
+pub const Null = struct {
+    pub fn alloc(_: *Null, _: usize, _: u8, _: usize) ?[*]u8 {
+        return null;
+    }
+
+    pub fn resize(_: *Null, buf: []u8, _: u8, new_len: usize, _: usize) bool {
+        assert(buf.len == 0);
+        return new_len == 0;
+    }
+
+    pub fn free(_: *Null, buf: []u8, _: u8, _: usize) void {
+        assert(buf.len == 0);
+    }
+
+    pub fn allocAll(_: *Null) ?[]u8 {
+        return null;
+    }
+
+    pub fn freeAll(_: *Null) void {}
+};
+
+pub const FixedBuffer = struct {
+    buffer: []u8,
+    len: usize,
+
+    const Self = @This();
+
+    fn isLastAllocation(self: Self, buf: []u8) bool {
+        return self.buffer.ptr + self.len == buf.ptr + buf.len;
+    }
+
+    pub fn alloc(self: *Self, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
+        _ = ret_addr;
+        const ptr_align = @as(usize, 1) << @intCast(std.mem.Allocator.Log2Align, log2_ptr_align);
+        const align_offset = std.mem.alignPointerOffset(self.buffer.ptr + self.len, ptr_align) orelse return null;
+        const start_index = self.len + align_offset;
+        const new_len = start_index + len;
+        if (new_len > self.buffer.len) return null;
+        self.len = new_len;
+        return self.buffer.ptr + start_index;
+    }
+
+    pub fn resize(self: *Self, buf: []u8, log2_buf_align: u8, new_len: usize, ret_addr: usize) bool {
+        _ = log2_buf_align;
+        _ = ret_addr;
+        assert(self.owns(buf));
+
+        if (!self.isLastAllocation(buf)) {
+            if (new_len > buf.len) return false;
+            return true;
+        }
+
+        if (new_len <= buf.len) {
+            self.len -= buf.len - new_len;
+            return true;
+        }
+
+        const new_total_len = self.len + (new_len - buf.len);
+        if (new_total_len > self.buffer.len) return false;
+        self.len = new_total_len;
+        return true;
+    }
+
+    pub fn free(self: *Self, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
+        _ = log2_buf_align;
+        _ = ret_addr;
+        assert(self.owns(buf));
+
+        if (self.isLastAllocation(buf)) {
+            self.len -= buf.len;
+        }
+    }
+
+    pub fn owns(self: *Self, buf: []u8) bool {
+        return sliceContainsSlice(self.buffer, buf);
+    }
+
+    pub fn allocAll(self: *Self) ?[]u8 {
+        if (self.len == self.buffer.len) return null;
+        self.len = self.buffer.len;
+        return self.buffer[self.len..self.buffer.len];
+    }
+
+    pub fn freeAll(self: *Self) void {
+        self.len = 0;
+    }
+};
+
+pub fn Fallback(comptime PrimaryAllocator: type, comptime FallbackAllocator: type) type {
+    return struct {
+        primary: PrimaryAllocator,
+        fallback: FallbackAllocator,
+
+        comptime {
+            validateAllocator(PrimaryAllocator);
+            validateAllocator(FallbackAllocator);
+        }
+
+        const Self = @This();
+
+        pub fn alloc(self: *Self, len: usize, ptr_align: u8, ret_addr: usize) ?[*]u8 {
+            return self.primary.alloc(len, ptr_align, ret_addr) orelse {
+                return self.fallback.alloc(len, ptr_align, ret_addr);
+            };
+        }
+
+        pub fn resize(self: *Self, buf: []u8, buf_align: u8, new_len: usize, ret_addr: usize) bool {
+            if (self.primary.owns(buf)) {
+                return self.primary.resize(buf, buf_align, new_len, ret_addr);
+            } else {
+                return self.fallback.resize(buf, buf_align, new_len, ret_addr);
+            }
+        }
+
+        pub fn free(self: *Self, buf: []u8, buf_align: u8, ret_addr: usize) void {
+            if (self.primary.owns(buf)) {
+                self.primary.free(buf, buf_align, ret_addr);
+            } else {
+                self.fallback.free(buf, buf_align, ret_addr);
+            }
+        }
+
+        usingnamespace if (@hasDecl(FallbackAllocator, "owns")) struct {
+            pub fn owns(self: *Self, buf: []u8) bool {
+                return self.primary.owns(buf) or self.fallback.owns(buf);
+            }
+        } else struct {};
+
+        usingnamespace if (@hasDecl(PrimaryAllocator, "freeAll") and @hasDecl(FallbackAllocator, "freeAll")) struct {
+            pub fn freeAll(self: *Self) void {
+                self.primary.freeAll();
+                self.fallback.freeAll();
+            }
+        } else struct {};
+    };
+}
+
+fn sliceContainsSlice(slice: []u8, other: []u8) bool {
+    return @ptrToInt(slice.ptr) <= @ptrToInt(other.ptr) and
+        @ptrToInt(slice.ptr) + slice.len >= @ptrToInt(other.ptr) + other.len;
+}
+
+pub fn Stack(comptime capacity: usize) type {
+    return struct {
+        buffer: [capacity]u8 = undefined,
+        fba: FixedBuffer,
+
+        const Self = @This();
+
+        pub fn init(self: *Self) void {
+            self.fba = FixedBuffer{ .buffer = &self.buffer, .len = 0 };
+        }
+
+        pub fn alloc(self: *Self, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
+            return self.fba.alloc(len, log2_ptr_align, ret_addr);
+        }
+
+        pub fn resize(self: *Self, buf: []u8, log2_buf_align: u8, new_len: usize, ret_addr: usize) bool {
+            return self.fba.resize(buf, log2_buf_align, new_len, ret_addr);
+        }
+
+        pub fn free(self: *Self, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
+            self.fba.free(buf, log2_buf_align, ret_addr);
+        }
+
+        pub fn owns(self: *Self, buf: []u8) bool {
+            return self.fba.owns(buf);
+        }
+
+        pub fn allocAll(self: *Self) ?[]u8 {
+            return self.fba.allocAll();
+        }
+
+        pub fn freeAll(self: *Self) void {
+            self.fba.freeAll();
+        }
+    };
+}
+
+pub fn FreeList(
+    comptime BackingAllocator: type,
+    comptime block_size: usize,
+    comptime alloc_count: usize, // number of blocks to allocate at a time,
+    comptime max_list_size: ?usize,
+) type {
+    return struct {
+        free_list: std.SinglyLinkedList(void),
+        free_size: usize,
+        backing_allocator: BackingAllocator,
+
+        const Self = @This();
+
+        const Node = std.SinglyLinkedList(void).Node;
+        const block_align = 1 << @ctz(block_size);
+        comptime {
+            assert(alloc_count != 0);
+            assert(@sizeOf(Node) <= block_size);
+            assert(block_size % block_align == 0);
+            assert(@alignOf(Node) <= block_align);
+        }
+
+        fn addBlocksToFreeList(self: *Self, blocks: [*][block_size]u8) void {
+            var i: usize = blocks.len;
+            while (i > 0) : (i -= 1) {
+                var node = @ptrCast(*Node, blocks[i - 1]);
+                self.free_list.prepend(node);
+            }
+            self.free_size += alloc_count - 1;
+        }
+
+        pub fn alloc(self: *Self, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
+            // TODO: should we check len < block_size and/or check if ptr_align == block_size
+            //       to try and avoid gcd calculation?
+
+            // blocks are always aligned to block_size, so the requested alignment
+            // must divide block_size
+            assert(block_align >= (@as(usize, 1) << @intCast(std.mem.Allocator.Log2Align, log2_ptr_align)));
+            assert(block_align % (@as(usize, 1) << @intCast(std.mem.Allocator.Log2Align, log2_ptr_align)) == 0);
+            assert(len <= block_size);
+
+            if (self.free_list.popFirst()) |node| {
+                self.free_size -= 1;
+                return @ptrCast([*]u8, node);
+            }
+
+            if (alloc_count > 1 and self.free_size + alloc_count - 1 < max_list_size) {
+                var ptr = self.backing_allocator.alloc(block_size * alloc_count, block_align, ret_addr);
+                var blocks = @ptrCast([*][block_size]u8, ptr)[1..alloc_count];
+                self.addBlocksToFreeList(blocks);
+                return ptr;
+            } else {
+                return self.backing_allocator.alloc(block_size * alloc_count, block_align, ret_addr);
+            }
+        }
+
+        pub fn resize(self: *Self, buf: []u8, log2_buf_align: u8, new_len: usize, ret_addr: usize) bool {
+            _ = self;
+            _ = buf;
+            _ = log2_buf_align;
+            _ = ret_addr;
+            return new_len <= block_size;
+        }
+
+        pub fn free(self: *Self, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
+            assert(block_align >= (@as(usize, 1) << @intCast(u6, log2_buf_align)));
+            assert(block_align % (@as(usize, 1) << @intCast(u6, log2_buf_align)) == 0);
+
+            if (max_list_size == null or self.free_size < max_list_size.?) {
+                var node = @ptrCast(*Node, @alignCast(block_align, buf.ptr));
+                self.free_list.prepend(node);
+                self.free_size += 1;
+                return;
+            } else {
+                self.backing_allocator.free(buf, log2_buf_align, ret_addr);
+            }
+        }
+
+        usingnamespace if (@hasDecl(BackingAllocator, "freeAll")) struct {
+            pub fn freeAll(self: *Self) void {
+                self.backing_allocator.freeAll();
+            }
+        } else struct {};
+    };
+}
+
+pub fn Segregated(
+    comptime SmallAllocator: type,
+    comptime LargeAllocator: type,
+    comptime threshold: usize, // largest size to use the small allocator for
+) type {
+    return struct {
+        small_allocator: SmallAllocator,
+        large_allocator: LargeAllocator,
+
+        const Self = @This();
+
+        pub fn alloc(self: *Self, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
+            return if (len <= threshold)
+                self.small_allocator.alloc(len, log2_ptr_align, ret_addr)
+            else
+                self.large_allocator.alloc(len, log2_ptr_align, ret_addr);
+        }
+
+        pub fn resize(self: *Self, buf: []u8, log2_buf_align: u8, new_len: usize, ret_addr: usize) bool {
+            return if (buf.len <= threshold and new_len <= threshold)
+                self.small_allocator.resize(buf, log2_buf_align, new_len, ret_addr)
+            else if (buf.len > threshold and new_len > threshold)
+                self.large_allocator.resize(buf, log2_buf_align, new_len, ret_addr)
+            else
+                false;
+        }
+
+        pub fn free(self: *Self, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
+            if (buf.len <= threshold) {
+                self.small_allocator.free(buf, log2_buf_align, ret_addr);
+            } else {
+                self.large_allocator.free(buf, log2_buf_align, ret_addr);
+            }
+        }
+
+        usingnamespace if (@hasDecl(SmallAllocator, "owns") and @hasDecl(LargeAllocator, "owns")) struct {
+            pub fn owns(self: *Self, buf: []u8) bool {
+                return if (buf.len <= threshold)
+                    self.small_allocator.owns(buf)
+                else
+                    self.large_allocator.owns(buf);
+            }
+        } else struct {};
+
+        usingnamespace if (@hasDecl(SmallAllocator, "freeAll") and @hasDecl(LargeAllocator, "freeAll")) struct {
+            pub fn freeAll(self: *Self) void {
+                self.small_allocator.freeAll();
+                self.large_allocator.freeAll();
+            }
+        } else struct {};
+    };
+}
+
+test {
+    comptime {
+        validateAllocator(Null);
+        validateAllocator(FixedBuffer);
+    }
+    _ = std.testing.refAllDecls(@This());
+    _ = std.testing.refAllDecls(Fallback(FixedBuffer, Null));
+    _ = std.testing.refAllDecls(Stack(1024));
+    _ = std.testing.refAllDecls(FreeList(Stack(1024), 64, 1, null));
+    _ = std.testing.refAllDecls(FreeList(Stack(1024), 8, 1, 32));
+
+    // TODO: Figure out why the heap tests leak with the testing allocator.
+    //       It doesn't seem to be anything in this code, as shown by doing
+    //       ```
+    //       try std.heap.testAllocator(std.testing.allocator);
+    //       ```
+    //       For now, just use a gpa and don't deinit()/detectLeaks()
+    // var test_allocator = Std{ .a = std.testing.allocator };
+    // const a = allocator(&test_allocator);
+
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var test_allocator = Fallback(Stack(1024), Std){ .primary = undefined, .fallback = Std{ .a = gpa.allocator() } };
+    test_allocator.primary.init();
+    const a = allocator(&test_allocator);
+
+    try std.heap.testAllocator(a); // the first realloc makes the test fail
+    try std.heap.testAllocatorAligned(a);
+    try std.heap.testAllocatorAlignedShrink(a);
+    try std.heap.testAllocatorLargeAlignment(a);
+}
