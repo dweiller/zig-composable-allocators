@@ -32,3 +32,6 @@ pub fn main() void {
 ```
 
 In the above, `a` is a `std.mem.Allocator` that will first try to use a bump allocator with 1024 bytes on the stack before reverting to using `std.mem.GeneralPurposeAllocator(.{})`.
+
+## WIP
+If you have suggestions, would like to contribute some allocators, or have issues using anything issues and PRs are welcome.
