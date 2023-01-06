@@ -21,13 +21,12 @@ The following allocators are either currently implemented (those with a tick) or
 
 All of these (except for the first three) are generic over other allocator types that they wrap, allowing them to be composed to create complex allocation strategies in a relatively simple way; for example, an allocator that allocates on the stack (as a bump allocator) but falls back to a `std.heap.GeneralPurposeAllocator` can be implemented as:
 ```zig
-const composable_allocator = @import("composable_allocator");
+const ca = @import("/path/to/composable-allocator/lib.zig");
 
 pub fn main() void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var std_allocator = Std{ .a = gpa.allocator() };
-    var test_allocator = Fallback(Stack(1024), Std){ .primary = undefined, .fallback = std_allocator };
-    test_allocator.primary.init();
+    var test_allocator: ca.Fallback(ca.Stack(1024), ca.Std) = undefined;
+    test_allocator.primary.initInPlaceExtra(.{gpa.allocator()});
     const a = allocator(&test_allocator);
 }
 ```

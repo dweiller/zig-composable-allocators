@@ -1,5 +1,7 @@
 const std = @import("std");
 
+const helpers = @import("helpers.zig");
+
 const assert = std.debug.assert;
 
 pub fn Interface(comptime T: type) type {
@@ -44,7 +46,52 @@ pub fn Interface(comptime T: type) type {
         };
 
         const optional = struct {
+            usingnamespace if (@hasDecl(T, "init")) struct {
+                /// initialise an allocator
+                pub const init = fn () T;
+
+                comptime {
+                    assert(init == @TypeOf(T.init));
+                }
+            } else struct {};
+
+            usingnamespace if (@hasDecl(T, "initInPlace")) struct {
+                pub const initInPlace = fn (self: *T) void;
+
+                comptime {
+                    assert(initInPlace == @TypeOf(T.initInPlace));
+                }
+            } else struct {};
+
+            usingnamespace if (@hasDecl(T, "default_init")) struct {
+                pub const default_init = T.default_init;
+
+                comptime {
+                    assert(@TypeOf(default_init) == T);
+                }
+            } else struct {};
+
+            usingnamespace if (@hasDecl(T, "initExtra")) struct {
+                pub const initExtra = @TypeOf(T.initExtra);
+
+                comptime {
+                    assert(@typeInfo(initExtra).Fn.return_type == T);
+                }
+            } else struct {};
+
+            usingnamespace if (@hasDecl(T, "initInPlaceExtra")) struct {
+                pub const initInPlaceExtra = @TypeOf(T.initInPlaceExtra);
+
+                comptime {
+                    assert(@typeInfo(initInPlaceExtra).Fn.params[0].type == *T);
+                    assert(@typeInfo(initInPlaceExtra).Fn.return_type == void);
+                }
+            } else struct {};
+
             /// Checks whether the allocator owns the memory for `buf`.
+            /// Composite allocators will generally pass `buf` to the underlying
+            /// allocators, so it is not advisable to have composite allocators
+            /// share backing allocators that define `owns`
             const owns = fn (self: *T, buf: []u8) bool;
 
             /// Attempt to return all remaining memory available to the allocator, or
@@ -106,11 +153,26 @@ pub fn validateAllocator(comptime T: type) void {
 
         for (std.meta.declarations(Interface(T).optional)) |decl| {
             if (@hasDecl(T, decl.name)) {
-                const E = @field(Interface(T).optional, decl.name);
-                const D = @TypeOf(@field(T, decl.name));
-                if (D != E) {
-                    @compileError("declaration " ++ decl.name ++ " in type " ++ @typeName(T) ++
-                        " is expected to have type " ++ @typeName(E) ++ ", found " ++ @typeName(D));
+                if (std.mem.startsWith(u8, decl.name, "usingnamespace_")) {
+                    // BUG: this doesn't work, there seems to be limitations/bugs in @typeInfo
+                    //      that prevent getting the decls of an included namespace
+                    //      (the info.decls slice below always has length 0.
+                    const ns = @field(Interface(T).optional, decl.name);
+                    const info = @typeInfo(ns).Struct;
+                    if (info.decls.len == 0) continue;
+                    const E = @field(ns, info.decls[0].name);
+                    const D = @TypeOf(@field(@field(T, decl.name), info.decls[0].name));
+                    if (D != E) {
+                        @compileError("declaration " ++ decl.name ++ " in type " ++ @typeName(T) ++
+                            " is expected to have type " ++ @typeName(E) ++ ", found " ++ @typeName(D));
+                    }
+                } else {
+                    const E = @field(Interface(T).optional, decl.name);
+                    const D = @TypeOf(@field(T, decl.name));
+                    if (D != E) {
+                        @compileError("declaration " ++ decl.name ++ " in type " ++ @typeName(T) ++
+                            " is expected to have type " ++ @typeName(E) ++ ", found " ++ @typeName(D));
+                    }
                 }
             }
         }
@@ -120,7 +182,7 @@ pub fn validateAllocator(comptime T: type) void {
 pub const Std = struct {
     a: std.mem.Allocator,
 
-    pub fn init(a: std.mem.Allocator) Std {
+    pub fn initExtra(a: std.mem.Allocator) Std {
         return Std{ .a = a };
     }
 
@@ -226,14 +288,14 @@ pub const FixedBuffer = struct {
 };
 
 pub fn Fallback(comptime PrimaryAllocator: type, comptime FallbackAllocator: type) type {
+    comptime {
+        validateAllocator(PrimaryAllocator);
+        validateAllocator(FallbackAllocator);
+    }
+
     return struct {
         primary: PrimaryAllocator,
         fallback: FallbackAllocator,
-
-        comptime {
-            validateAllocator(PrimaryAllocator);
-            validateAllocator(FallbackAllocator);
-        }
 
         const Self = @This();
 
@@ -258,6 +320,26 @@ pub fn Fallback(comptime PrimaryAllocator: type, comptime FallbackAllocator: typ
                 self.fallback.free(buf, buf_align, ret_addr);
             }
         }
+
+        usingnamespace if (helpers.hasInit2(PrimaryAllocator, FallbackAllocator)) struct {
+            pub const init = helpers.init2(Self, "primary", PrimaryAllocator, "fallback", FallbackAllocator);
+        } else struct {};
+
+        usingnamespace if (helpers.hasDefaultInit2(PrimaryAllocator, FallbackAllocator)) struct {
+            pub const default_init = helpers.defaultInit2(Self, "primary", PrimaryAllocator, "fallback", FallbackAllocator);
+        } else struct {};
+
+        usingnamespace if (helpers.hasInitInPlace2(PrimaryAllocator, FallbackAllocator)) struct {
+            pub const initInPlace = helpers.initInPlace2(Self, "primary", PrimaryAllocator, "fallback", FallbackAllocator);
+        } else struct {};
+
+        usingnamespace if (helpers.hasInitExtra2(PrimaryAllocator, FallbackAllocator)) struct {
+            pub const initExtra = helpers.initExtra2(Self, "primary", PrimaryAllocator, "fallback", FallbackAllocator);
+        } else struct {};
+
+        usingnamespace if (helpers.hasInitInPlaceExtra2(PrimaryAllocator, FallbackAllocator)) struct {
+            pub const initInPlaceExtra = helpers.initInPlaceExtra2(Self, "primary", PrimaryAllocator, "fallback", FallbackAllocator);
+        } else struct {};
 
         usingnamespace if (@hasDecl(FallbackAllocator, "owns")) struct {
             pub fn owns(self: *Self, buf: []u8) bool {
@@ -286,7 +368,7 @@ pub fn Stack(comptime capacity: usize) type {
 
         const Self = @This();
 
-        pub fn init(self: *Self) void {
+        pub fn initInPlace(self: *Self) void {
             self.fba = FixedBuffer{ .buffer = &self.buffer, .len = 0 };
         }
 
@@ -322,6 +404,10 @@ pub fn FreeList(
     comptime alloc_count: usize, // number of blocks to allocate at a time,
     comptime max_list_size: ?usize,
 ) type {
+    comptime {
+        validateAllocator(BackingAllocator);
+    }
+
     return struct {
         free_list: std.SinglyLinkedList(void),
         free_size: usize,
@@ -341,7 +427,7 @@ pub fn FreeList(
         fn addBlocksToFreeList(self: *Self, blocks: [*][block_size]u8) void {
             var i: usize = blocks.len;
             while (i > 0) : (i -= 1) {
-                var node = @ptrCast(*Node, blocks[i - 1]);
+                var node = @ptrCast(*Node, @alignCast(block_align, &blocks[i - 1]));
                 self.free_list.prepend(node);
             }
             self.free_size += alloc_count - 1;
@@ -362,7 +448,7 @@ pub fn FreeList(
                 return @ptrCast([*]u8, node);
             }
 
-            if (alloc_count > 1 and self.free_size + alloc_count - 1 < max_list_size) {
+            if (alloc_count > 1 and if (max_list_size) |max| self.free_size + alloc_count - 1 < max else true) {
                 var ptr = self.backing_allocator.alloc(block_size * alloc_count, block_align, ret_addr);
                 var blocks = @ptrCast([*][block_size]u8, ptr)[1..alloc_count];
                 self.addBlocksToFreeList(blocks);
@@ -399,6 +485,52 @@ pub fn FreeList(
                 self.backing_allocator.freeAll();
             }
         } else struct {};
+
+        usingnamespace if (@hasDecl(BackingAllocator, "init")) struct {
+            pub fn init() Self {
+                return Self{
+                    .free_list = .{ .first = null },
+                    .free_size = 0,
+                    .backing_allocator = BackingAllocator.init(),
+                };
+            }
+        } else struct {};
+
+        usingnamespace if (@hasDecl(BackingAllocator, "initExtra")) struct {
+            pub fn initExtra(args: std.meta.ArgsTuple(@TypeOf(BackingAllocator.initExtra))) Self {
+                return Self{
+                    .free_list = .{ .first = null },
+                    .free_size = 0,
+                    .backing_allocator = @call(.auto, BackingAllocator.initExtra, args),
+                };
+            }
+        } else struct {};
+
+        usingnamespace if (@hasDecl(BackingAllocator, "initInPlace")) struct {
+            pub fn initInPlace(self: *Self) void {
+                self.free_list = .{ .first = null };
+                self.free_size = 0;
+                self.backing_allocator.initInPlace();
+            }
+        } else struct {};
+
+        usingnamespace if (@hasDecl(BackingAllocator, "initInPlaceExtra")) struct {
+            pub fn initInPlaceExtra(self: *Self, args: helpers.ArgsIIPE(@TypeOf(BackingAllocator.initInPlaceExtra))) void {
+                self.free_list = .{ .first = null };
+                self.free_size = 0;
+                @call(.auto, self.backing_allocator.initInPlaceExtra, .{&self.backing_allocator} ++ args);
+            }
+        } else struct {};
+
+        usingnamespace if (@hasDecl(BackingAllocator, "default_init")) struct {
+            pub fn init() Self {
+                return Self{
+                    .free_list = .{ .first = null },
+                    .free_size = 0,
+                    .backing_allocator = BackingAllocator.default_init,
+                };
+            }
+        } else struct {};
     };
 }
 
@@ -407,6 +539,11 @@ pub fn Segregated(
     comptime LargeAllocator: type,
     comptime threshold: usize, // largest size to use the small allocator for
 ) type {
+    comptime {
+        validateAllocator(SmallAllocator);
+        validateAllocator(LargeAllocator);
+    }
+
     return struct {
         small_allocator: SmallAllocator,
         large_allocator: LargeAllocator,
@@ -437,6 +574,56 @@ pub fn Segregated(
             }
         }
 
+        usingnamespace if (helpers.hasInit2(SmallAllocator, LargeAllocator)) struct {
+            pub const init = helpers.init2(
+                Self,
+                "small_allocator",
+                SmallAllocator,
+                "large_allocator",
+                LargeAllocator,
+            );
+        } else struct {};
+
+        usingnamespace if (helpers.hasDefaultInit2(SmallAllocator, LargeAllocator)) struct {
+            pub const default_init = helpers.defaultInit2(
+                Self,
+                "small_allocator",
+                SmallAllocator,
+                "large_allocator",
+                LargeAllocator,
+            );
+        } else struct {};
+
+        usingnamespace if (helpers.hasInitInPlace2(SmallAllocator, LargeAllocator)) struct {
+            pub const initInPlace = helpers.initInPlace2(
+                Self,
+                "small_allocator",
+                SmallAllocator,
+                "large_allocator",
+                LargeAllocator,
+            );
+        } else struct {};
+
+        usingnamespace if (helpers.hasInitExtra2(SmallAllocator, LargeAllocator)) struct {
+            pub const initExtra = helpers.initExtra2(
+                Self,
+                "small_allocator",
+                SmallAllocator,
+                "large_allocator",
+                LargeAllocator,
+            );
+        } else struct {};
+
+        usingnamespace if (helpers.hasInitInPlaceExtra2(SmallAllocator, LargeAllocator)) struct {
+            pub const initInPlaceExtra = helpers.initInPlaceExtra2(
+                Self,
+                "small_allocator",
+                SmallAllocator,
+                "large_allocator",
+                LargeAllocator,
+            );
+        } else struct {};
+
         usingnamespace if (@hasDecl(SmallAllocator, "owns") and @hasDecl(LargeAllocator, "owns")) struct {
             pub fn owns(self: *Self, buf: []u8) bool {
                 return if (buf.len <= threshold)
@@ -456,28 +643,41 @@ pub fn Segregated(
 }
 
 test {
+    const StackFallback = Fallback(Stack(1024), Std);
+    const StackSegregatedFallback = Fallback(
+        Stack(1024),
+        Segregated(
+            FreeList(FixedBuffer, 64, 2, null),
+            Std,
+            64,
+        ),
+    );
     comptime {
         validateAllocator(Null);
         validateAllocator(FixedBuffer);
+        validateAllocator(StackFallback);
+        validateAllocator(StackSegregatedFallback);
     }
-    _ = std.testing.refAllDecls(@This());
-    _ = std.testing.refAllDecls(Fallback(FixedBuffer, Null));
-    _ = std.testing.refAllDecls(Stack(1024));
-    _ = std.testing.refAllDecls(FreeList(Stack(1024), 64, 1, null));
-    _ = std.testing.refAllDecls(FreeList(Stack(1024), 8, 1, 32));
+    std.testing.refAllDecls(@This());
+    std.testing.refAllDecls(Fallback(FixedBuffer, Null));
+    std.testing.refAllDecls(Stack(1024));
+    std.testing.refAllDecls(FreeList(Stack(1024), 64, 1, null));
+    std.testing.refAllDecls(FreeList(Stack(1024), 8, 1, 32));
+    std.testing.refAllDecls(StackFallback);
+    std.testing.refAllDecls(StackSegregatedFallback);
 
     // TODO: Figure out why the heap tests leak with the testing allocator.
     //       It doesn't seem to be anything in this code, as shown by doing
-    //       ```
+    //
     //       try std.heap.testAllocator(std.testing.allocator);
-    //       ```
-    //       For now, just use a gpa and don't deinit()/detectLeaks()
-    // var test_allocator = Std{ .a = std.testing.allocator };
-    // const a = allocator(&test_allocator);
+    //
+    //       For now, just use a gpa and don't deinit()/detectLeaks(), which
+    //       will at least test alloc/resize behaviour
 
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    var test_allocator = Fallback(Stack(1024), Std){ .primary = undefined, .fallback = Std{ .a = gpa.allocator() } };
-    test_allocator.primary.init();
+    var test_allocator: Fallback(Stack(1024), Std) = undefined;
+    // test_allocator.initInPlaceExtra(.{std.testing.allocator});
+    test_allocator.initInPlaceExtra(.{gpa.allocator()});
     const a = allocator(&test_allocator);
 
     try std.heap.testAllocator(a); // the first realloc makes the test fail
