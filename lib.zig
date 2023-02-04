@@ -440,7 +440,6 @@ pub fn FreeList(
             // blocks are always aligned to block_size, so the requested alignment
             // must divide block_size
             assert(block_align >= (@as(usize, 1) << @intCast(std.mem.Allocator.Log2Align, log2_ptr_align)));
-            assert(block_align % (@as(usize, 1) << @intCast(std.mem.Allocator.Log2Align, log2_ptr_align)) == 0);
             assert(len <= block_size);
 
             if (self.free_list.popFirst()) |node| {
