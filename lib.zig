@@ -321,33 +321,33 @@ pub fn Fallback(comptime PrimaryAllocator: type, comptime FallbackAllocator: typ
             }
         }
 
-        usingnamespace if (helpers.hasInit2(PrimaryAllocator, FallbackAllocator)) struct {
+        pub usingnamespace if (helpers.hasInit2(PrimaryAllocator, FallbackAllocator)) struct {
             pub const init = helpers.init2(Self, "primary", PrimaryAllocator, "fallback", FallbackAllocator);
         } else struct {};
 
-        usingnamespace if (helpers.hasDefaultInit2(PrimaryAllocator, FallbackAllocator)) struct {
+        pub usingnamespace if (helpers.hasDefaultInit2(PrimaryAllocator, FallbackAllocator)) struct {
             pub const default_init = helpers.defaultInit2(Self, "primary", PrimaryAllocator, "fallback", FallbackAllocator);
         } else struct {};
 
-        usingnamespace if (helpers.hasInitInPlace2(PrimaryAllocator, FallbackAllocator)) struct {
+        pub usingnamespace if (helpers.hasInitInPlace2(PrimaryAllocator, FallbackAllocator)) struct {
             pub const initInPlace = helpers.initInPlace2(Self, "primary", PrimaryAllocator, "fallback", FallbackAllocator);
         } else struct {};
 
-        usingnamespace if (helpers.hasInitExtra2(PrimaryAllocator, FallbackAllocator)) struct {
+        pub usingnamespace if (helpers.hasInitExtra2(PrimaryAllocator, FallbackAllocator)) struct {
             pub const initExtra = helpers.initExtra2(Self, "primary", PrimaryAllocator, "fallback", FallbackAllocator);
         } else struct {};
 
-        usingnamespace if (helpers.hasInitInPlaceExtra2(PrimaryAllocator, FallbackAllocator)) struct {
+        pub usingnamespace if (helpers.hasInitInPlaceExtra2(PrimaryAllocator, FallbackAllocator)) struct {
             pub const initInPlaceExtra = helpers.initInPlaceExtra2(Self, "primary", PrimaryAllocator, "fallback", FallbackAllocator);
         } else struct {};
 
-        usingnamespace if (@hasDecl(FallbackAllocator, "owns")) struct {
+        pub usingnamespace if (@hasDecl(FallbackAllocator, "owns")) struct {
             pub fn owns(self: *Self, buf: []u8) bool {
                 return self.primary.owns(buf) or self.fallback.owns(buf);
             }
         } else struct {};
 
-        usingnamespace if (@hasDecl(PrimaryAllocator, "freeAll") and @hasDecl(FallbackAllocator, "freeAll")) struct {
+        pub usingnamespace if (@hasDecl(PrimaryAllocator, "freeAll") and @hasDecl(FallbackAllocator, "freeAll")) struct {
             pub fn freeAll(self: *Self) void {
                 self.primary.freeAll();
                 self.fallback.freeAll();
@@ -479,13 +479,13 @@ pub fn FreeList(
             }
         }
 
-        usingnamespace if (@hasDecl(BackingAllocator, "freeAll")) struct {
+        pub usingnamespace if (@hasDecl(BackingAllocator, "freeAll")) struct {
             pub fn freeAll(self: *Self) void {
                 self.backing_allocator.freeAll();
             }
         } else struct {};
 
-        usingnamespace if (@hasDecl(BackingAllocator, "init")) struct {
+        pub usingnamespace if (@hasDecl(BackingAllocator, "init")) struct {
             pub fn init() Self {
                 return Self{
                     .free_list = .{ .first = null },
@@ -495,7 +495,7 @@ pub fn FreeList(
             }
         } else struct {};
 
-        usingnamespace if (@hasDecl(BackingAllocator, "initExtra")) struct {
+        pub usingnamespace if (@hasDecl(BackingAllocator, "initExtra")) struct {
             pub fn initExtra(args: std.meta.ArgsTuple(@TypeOf(BackingAllocator.initExtra))) Self {
                 return Self{
                     .free_list = .{ .first = null },
@@ -505,7 +505,7 @@ pub fn FreeList(
             }
         } else struct {};
 
-        usingnamespace if (@hasDecl(BackingAllocator, "initInPlace")) struct {
+        pub usingnamespace if (@hasDecl(BackingAllocator, "initInPlace")) struct {
             pub fn initInPlace(self: *Self) void {
                 self.free_list = .{ .first = null };
                 self.free_size = 0;
@@ -513,7 +513,7 @@ pub fn FreeList(
             }
         } else struct {};
 
-        usingnamespace if (@hasDecl(BackingAllocator, "initInPlaceExtra")) struct {
+        pub usingnamespace if (@hasDecl(BackingAllocator, "initInPlaceExtra")) struct {
             pub fn initInPlaceExtra(self: *Self, args: helpers.ArgsIIPE(@TypeOf(BackingAllocator.initInPlaceExtra))) void {
                 self.free_list = .{ .first = null };
                 self.free_size = 0;
@@ -521,7 +521,7 @@ pub fn FreeList(
             }
         } else struct {};
 
-        usingnamespace if (@hasDecl(BackingAllocator, "default_init")) struct {
+        pub usingnamespace if (@hasDecl(BackingAllocator, "default_init")) struct {
             pub fn init() Self {
                 return Self{
                     .free_list = .{ .first = null },
@@ -573,7 +573,7 @@ pub fn Segregated(
             }
         }
 
-        usingnamespace if (helpers.hasInit2(SmallAllocator, LargeAllocator)) struct {
+        pub usingnamespace if (helpers.hasInit2(SmallAllocator, LargeAllocator)) struct {
             pub const init = helpers.init2(
                 Self,
                 "small_allocator",
@@ -583,7 +583,7 @@ pub fn Segregated(
             );
         } else struct {};
 
-        usingnamespace if (helpers.hasDefaultInit2(SmallAllocator, LargeAllocator)) struct {
+        pub usingnamespace if (helpers.hasDefaultInit2(SmallAllocator, LargeAllocator)) struct {
             pub const default_init = helpers.defaultInit2(
                 Self,
                 "small_allocator",
@@ -593,7 +593,7 @@ pub fn Segregated(
             );
         } else struct {};
 
-        usingnamespace if (helpers.hasInitInPlace2(SmallAllocator, LargeAllocator)) struct {
+        pub usingnamespace if (helpers.hasInitInPlace2(SmallAllocator, LargeAllocator)) struct {
             pub const initInPlace = helpers.initInPlace2(
                 Self,
                 "small_allocator",
@@ -603,7 +603,7 @@ pub fn Segregated(
             );
         } else struct {};
 
-        usingnamespace if (helpers.hasInitExtra2(SmallAllocator, LargeAllocator)) struct {
+        pub usingnamespace if (helpers.hasInitExtra2(SmallAllocator, LargeAllocator)) struct {
             pub const initExtra = helpers.initExtra2(
                 Self,
                 "small_allocator",
@@ -613,7 +613,7 @@ pub fn Segregated(
             );
         } else struct {};
 
-        usingnamespace if (helpers.hasInitInPlaceExtra2(SmallAllocator, LargeAllocator)) struct {
+        pub usingnamespace if (helpers.hasInitInPlaceExtra2(SmallAllocator, LargeAllocator)) struct {
             pub const initInPlaceExtra = helpers.initInPlaceExtra2(
                 Self,
                 "small_allocator",
@@ -623,7 +623,7 @@ pub fn Segregated(
             );
         } else struct {};
 
-        usingnamespace if (@hasDecl(SmallAllocator, "owns") and @hasDecl(LargeAllocator, "owns")) struct {
+        pub usingnamespace if (@hasDecl(SmallAllocator, "owns") and @hasDecl(LargeAllocator, "owns")) struct {
             pub fn owns(self: *Self, buf: []u8) bool {
                 return if (buf.len <= threshold)
                     self.small_allocator.owns(buf)
@@ -632,7 +632,7 @@ pub fn Segregated(
             }
         } else struct {};
 
-        usingnamespace if (@hasDecl(SmallAllocator, "freeAll") and @hasDecl(LargeAllocator, "freeAll")) struct {
+        pub usingnamespace if (@hasDecl(SmallAllocator, "freeAll") and @hasDecl(LargeAllocator, "freeAll")) struct {
             pub fn freeAll(self: *Self) void {
                 self.small_allocator.freeAll();
                 self.large_allocator.freeAll();
