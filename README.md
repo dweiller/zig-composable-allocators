@@ -27,7 +27,7 @@ pub fn main() void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var test_allocator: ca.Fallback(ca.Stack(1024), ca.Std) = undefined;
     test_allocator.primary.initInPlaceExtra(.{gpa.allocator()});
-    const a = allocator(&test_allocator);
+    const a = ca.allocator(&test_allocator);
 }
 ```
 
