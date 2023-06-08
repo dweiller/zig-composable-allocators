@@ -667,18 +667,8 @@ test {
     std.testing.refAllDecls(StackFallback);
     std.testing.refAllDecls(StackSegregatedFallback);
 
-    // TODO: Figure out why the heap tests leak with the testing allocator.
-    //       It doesn't seem to be anything in this code, as shown by doing
-    //
-    //       try std.heap.testAllocator(std.testing.allocator);
-    //
-    //       For now, just use a gpa and don't deinit()/detectLeaks(), which
-    //       will at least test alloc/resize behaviour
-
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
     var test_allocator: Fallback(Stack(1024), Std) = undefined;
-    // test_allocator.initInPlaceExtra(.{std.testing.allocator});
-    test_allocator.initInPlaceExtra(.{gpa.allocator()});
+    test_allocator.initInPlaceExtra(.{std.testing.allocator});
     const a = allocator(&test_allocator);
 
     try std.heap.testAllocator(a); // the first realloc makes the test fail
