@@ -416,7 +416,8 @@ pub fn FreeList(
         const Self = @This();
 
         const Node = std.SinglyLinkedList(void).Node;
-        const block_align = 1 << @ctz(block_size);
+        const log2_block_align = @ctz(block_size);
+        const block_align = 1 << log2_block_align;
         comptime {
             assert(alloc_count != 0);
             assert(@sizeOf(Node) <= block_size);
@@ -424,13 +425,13 @@ pub fn FreeList(
             assert(@alignOf(Node) <= block_align);
         }
 
-        fn addBlocksToFreeList(self: *Self, blocks: [*][block_size]u8) void {
+        fn addBlocksToFreeList(self: *Self, blocks: [][block_size]u8) void {
             var i: usize = blocks.len;
             while (i > 0) : (i -= 1) {
                 var node = @ptrCast(*Node, @alignCast(block_align, &blocks[i - 1]));
                 self.free_list.prepend(node);
             }
-            self.free_size += alloc_count - 1;
+            self.free_size += blocks.len;
         }
 
         pub fn alloc(self: *Self, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
@@ -479,11 +480,12 @@ pub fn FreeList(
             }
         }
 
-        pub usingnamespace if (@hasDecl(BackingAllocator, "freeAll")) struct {
-            pub fn freeAll(self: *Self) void {
-                self.backing_allocator.freeAll();
+        pub fn freeAll(self: *Self) void {
+            while (self.free_list.popFirst()) |node| {
+                const casted_ptr = @alignCast(block_align, @ptrCast(*[block_size]u8, node));
+                self.backing_allocator.free(casted_ptr, log2_block_align, @returnAddress());
             }
-        } else struct {};
+        }
 
         pub usingnamespace if (@hasDecl(BackingAllocator, "init")) struct {
             pub fn init() Self {
