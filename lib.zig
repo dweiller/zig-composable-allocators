@@ -116,19 +116,19 @@ pub fn allocator(a: anytype) std.mem.Allocator {
         .vtable = &.{
             .alloc = &struct {
                 fn alloc(ptr: *anyopaque, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
-                    const self = @ptrCast(*Self, @alignCast(@alignOf(Self), ptr));
+                    const self: *Self = @ptrCast(@alignCast(ptr));
                     return self.alloc(len, log2_ptr_align, ret_addr);
                 }
             }.alloc,
             .resize = &struct {
                 fn resize(ptr: *anyopaque, buf: []u8, log2_buf_align: u8, new_len: usize, ret_addr: usize) bool {
-                    const self = @ptrCast(*Self, @alignCast(@alignOf(Self), ptr));
+                    const self: *Self = @ptrCast(@alignCast(ptr));
                     return self.resize(buf, log2_buf_align, new_len, ret_addr);
                 }
             }.resize,
             .free = &struct {
                 fn free(ptr: *anyopaque, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
-                    const self = @ptrCast(*Self, @alignCast(@alignOf(Self), ptr));
+                    const self: *Self = @ptrCast(@alignCast(ptr));
                     self.free(buf, log2_buf_align, ret_addr);
                 }
             }.free,
@@ -232,7 +232,7 @@ pub const FixedBuffer = struct {
 
     pub fn alloc(self: *Self, len: usize, log2_ptr_align: u8, ret_addr: usize) ?[*]u8 {
         _ = ret_addr;
-        const ptr_align = @as(usize, 1) << @intCast(std.mem.Allocator.Log2Align, log2_ptr_align);
+        const ptr_align = @as(usize, 1) << @intCast(log2_ptr_align);
         const align_offset = std.mem.alignPointerOffset(self.buffer.ptr + self.len, ptr_align) orelse return null;
         const start_index = self.len + align_offset;
         const new_len = start_index + len;
@@ -357,8 +357,8 @@ pub fn Fallback(comptime PrimaryAllocator: type, comptime FallbackAllocator: typ
 }
 
 fn sliceContainsSlice(slice: []u8, other: []u8) bool {
-    return @ptrToInt(slice.ptr) <= @ptrToInt(other.ptr) and
-        @ptrToInt(slice.ptr) + slice.len >= @ptrToInt(other.ptr) + other.len;
+    return @intFromPtr(slice.ptr) <= @intFromPtr(other.ptr) and
+        @intFromPtr(slice.ptr) + slice.len >= @intFromPtr(other.ptr) + other.len;
 }
 
 pub fn Stack(comptime capacity: usize) type {
@@ -425,10 +425,10 @@ pub fn FreeList(
             assert(@alignOf(Node) <= block_align);
         }
 
-        fn addBlocksToFreeList(self: *Self, blocks: [][block_size]u8) void {
+        fn addBlocksToFreeList(self: *Self, blocks: []align(block_align) [block_size]u8) void {
             var i: usize = blocks.len;
             while (i > 0) : (i -= 1) {
-                var node = @ptrCast(*Node, @alignCast(block_align, &blocks[i - 1]));
+                var node: *Node = @ptrCast(@alignCast(&blocks[i - 1]));
                 self.free_list.prepend(node);
             }
             self.free_size += blocks.len;
@@ -440,17 +440,18 @@ pub fn FreeList(
 
             // blocks are always aligned to block_size, so the requested alignment
             // must divide block_size
-            assert(block_align >= (@as(usize, 1) << @intCast(std.mem.Allocator.Log2Align, log2_ptr_align)));
+            assert(block_align >= (@as(usize, 1) << @intCast(log2_ptr_align)));
             assert(len <= block_size);
 
             if (self.free_list.popFirst()) |node| {
                 self.free_size -= 1;
-                return @ptrCast([*]u8, node);
+                return @ptrCast(node);
             }
 
             if (alloc_count > 1 and if (max_list_size) |max| self.free_size + alloc_count - 1 < max else true) {
-                var ptr = self.backing_allocator.alloc(block_size * alloc_count, block_align, ret_addr);
-                var blocks = @ptrCast([*][block_size]u8, ptr)[1..alloc_count];
+                const ptr = self.backing_allocator.alloc(block_size * alloc_count, block_align, ret_addr);
+                const block_ptr: [*]align(block_align)[block_size]u8 = @ptrCast(@alignCast(ptr));
+                const blocks = block_ptr[1..alloc_count];
                 self.addBlocksToFreeList(blocks);
                 return ptr;
             } else {
@@ -467,11 +468,11 @@ pub fn FreeList(
         }
 
         pub fn free(self: *Self, buf: []u8, log2_buf_align: u8, ret_addr: usize) void {
-            assert(block_align >= (@as(usize, 1) << @intCast(u6, log2_buf_align)));
-            assert(block_align % (@as(usize, 1) << @intCast(u6, log2_buf_align)) == 0);
+            assert(block_align >= (@as(usize, 1) << @intCast(log2_buf_align)));
+            assert(block_align % (@as(usize, 1) << @intCast(log2_buf_align)) == 0);
 
             if (max_list_size == null or self.free_size < max_list_size.?) {
-                var node = @ptrCast(*Node, @alignCast(block_align, buf.ptr));
+                const node: *align(block_align) Node = @ptrCast(@alignCast(buf.ptr));
                 self.free_list.prepend(node);
                 self.free_size += 1;
                 return;
@@ -482,7 +483,7 @@ pub fn FreeList(
 
         pub fn freeAll(self: *Self) void {
             while (self.free_list.popFirst()) |node| {
-                const casted_ptr = @alignCast(block_align, @ptrCast(*[block_size]u8, node));
+                const casted_ptr: *align(block_align) [block_size]u8 = @alignCast(@ptrCast(node));
                 self.backing_allocator.free(casted_ptr, log2_block_align, @returnAddress());
             }
         }
